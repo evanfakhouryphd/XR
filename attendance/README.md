@@ -20,9 +20,19 @@ A small web app for taking attendance at university classes with QR codes.
 
 **What it can't do.** A web page cannot read a phone's identity (phone number, IMEI, Apple or Google account) without the student typing something once. That's why there's a one-time registration. After that, the phone is recognized by a secure cookie. No web-based system is cheat-proof: a student who hands their actual phone to a friend in the room can still check in that way. Comparing the count with a quick headcount covers that case.
 
-## Running it
+## Deploying to Vercel (recommended)
 
-You need **Node.js 22.13 or newer**. It uses Node's built-in SQLite, so there is no database to install.
+1. In Vercel, click **Add New → Project** and import this GitHub repository.
+2. Set **Root Directory** to `attendance`. Leave the framework preset as **Other** and the build settings empty. `vercel.json` handles the rest.
+3. Click **Deploy**. The first deploy shows "No database configured" until the next step is done.
+4. Open the project's **Storage** tab, then **Create Database** → **Neon** (serverless Postgres, free tier) → connect it to the project. This adds `DATABASE_URL` automatically.
+5. Under **Deployments**, choose **Redeploy**. Open your `https://<project>.vercel.app` address and create your instructor account. The tables are created automatically on first use.
+
+Vercel provides HTTPS, which the phone location check needs.
+
+## Running it locally
+
+You need Node.js 22. Locally the app uses an embedded Postgres (PGlite) stored in `./data`, so there is nothing else to install.
 
 ```bash
 cd attendance
@@ -30,28 +40,21 @@ npm install
 npm start          # http://localhost:3000
 ```
 
-Open the address in your browser and create your instructor account. The first account is created freely; to allow more, set `ALLOW_SIGNUP=1`.
-
-### Students' phones must be able to reach the server, over HTTPS
-
-`localhost` works only on your own computer. For real use, put the app on a public HTTPS address. HTTPS is also required for the location check. Some options:
-
-- **Quick test from your laptop:** run `npx cloudflared tunnel --url http://localhost:3000` (or use ngrok), then start the app with `PUBLIC_URL=https://<the-tunnel-address> npm start`.
-- **Permanent hosting:** any Node host with a persistent disk works (Render, Railway, Fly.io, a university VM, and so on). Set `PUBLIC_URL` and `TRUST_PROXY=1`, and keep `DB_FILE` on the persistent disk.
+Students' phones can't reach `localhost`. To try it with real phones, run `npx cloudflared tunnel --url http://localhost:3000` and open the `https://…trycloudflare.com` address it prints.
 
 ### Settings (environment variables)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `3000` | Port to listen on |
-| `PUBLIC_URL` | address the browser used | Address put into the QR codes, e.g. `https://attendance.myuni.edu` |
-| `DB_FILE` | `./data/attendance.db` | SQLite database file |
-| `TRUST_PROXY` | off | Set to `1` behind a reverse proxy or load balancer |
-| `ALLOW_SIGNUP` | off | Set to `1` to let more instructors create accounts |
+| `DATABASE_URL` | unset, which uses PGlite in `./data` | Postgres connection string (Neon, Supabase, RDS, …) |
+| `PUBLIC_URL` | address the browser used | Address put into the QR codes, e.g. a custom domain |
+| `ALLOW_SIGNUP` | off | Set to `1` to let more instructors create accounts (the first account can always be created) |
 | `QR_ROTATE_SECONDS` | `10` | How often the QR code changes |
 | `QR_GRACE_WINDOWS` | `2` | How many earlier codes are still accepted (allows for slow scans) |
 | `CHECKIN_WINDOW_MINUTES` | `5` | Time a first-time student has to fill in the registration form after scanning |
-| `TZ` | system | Time zone used for session times and "late" marking, e.g. `Asia/Beirut` |
+| `PORT`, `DATA_DIR`, `TRUST_PROXY` | | Settings for running on your own server |
+
+Each class has its own **time zone** (Settings tab). It is taken from your browser when you create the class and is used for "today" and for marking students late.
 
 ## How to use it in class
 
@@ -68,4 +71,4 @@ Open the address in your browser and create your instructor account. The first a
 npm test   # end-to-end tests of the check-in flow and the anti-cheating rules
 ```
 
-Code layout: `server.js` (API and check-in logic), `lib/security.js` (rotating QR tokens, claims, passwords, distance), `lib/db.js` (database schema), `public/` (instructor dashboard in `app.js`, student page in `checkin.js`).
+Code layout: `server.js` (API and check-in logic), `lib/security.js` (rotating QR tokens, claims, passwords, distance), `lib/db.js` (Postgres schema and drivers), `lib/time.js` (time zones), `api/index.js` (Vercel entry), `public/` (instructor dashboard in `app.js`, student page in `checkin.js`).

@@ -11,7 +11,6 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const pad = (n) => String(n).padStart(2, '0');
   const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const today = () => ymd(new Date());
   const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const weekday = (date) => WEEKDAYS[new Date(`${date}T12:00:00`).getDay()];
   const fmtDate = (date) => new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
@@ -165,7 +164,7 @@
         </form>
       </div>`;
     $('#new-class').onsubmit = action(async () => {
-      const { id } = await api('POST', '/api/classes', { name: $('#cn').value, code: $('#cc').value });
+      const { id } = await api('POST', '/api/classes', { name: $('#cn').value, code: $('#cc').value, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
       location.hash = `#/class/${id}/sessions`;
     });
   }
@@ -200,9 +199,8 @@
     return classSessions(el, data);
   }
 
-  function classSessions(el, { class: c, sessions, members }) {
-    const t = today();
-    const in3m = new Date(); in3m.setMonth(in3m.getMonth() + 3);
+  function classSessions(el, { class: c, sessions, members, today: t }) {
+    const d3 = new Date(`${t}T12:00:00`); d3.setMonth(d3.getMonth() + 3); const in3m = ymd(d3);
     const upcoming = sessions.filter((s) => s.date >= t);
     const past = sessions.filter((s) => s.date < t).reverse();
     const row = (s) => `
@@ -229,7 +227,7 @@
           </div>
           <div class="inline-fields">
             <div class="field"><label for="sd">First day</label><input id="sd" type="date" value="${t}" required></div>
-            <div class="field"><label for="ed">Last day</label><input id="ed" type="date" value="${ymd(in3m)}" required></div>
+            <div class="field"><label for="ed">Last day</label><input id="ed" type="date" value="${in3m}" required></div>
             <div class="field"><label for="st">Starts</label><input id="st" type="time" value="09:00" required></div>
             <div class="field"><label for="et">Ends</label><input id="et" type="time" value="10:30" required></div>
           </div>
@@ -358,9 +356,16 @@
           <div class="field"><label for="n">Class name</label><input id="n" type="text" value="${esc(c.name)}" required></div>
           <div class="field"><label for="code">Course code</label><input id="code" type="text" value="${esc(c.code)}"></div>
         </div>
-        <div class="field" style="max-width:260px">
-          <label for="late">Mark as late after (minutes)</label>
-          <input id="late" type="number" min="0" max="600" value="${c.late_after_min}">
+        <div class="inline-fields">
+          <div class="field">
+            <label for="late">Mark as late after (minutes)</label>
+            <input id="late" type="number" min="0" max="600" value="${c.late_after_min}">
+          </div>
+          <div class="field">
+            <label for="tz">Time zone</label>
+            <input id="tz" type="text" value="${esc(c.timezone)}" list="tz-list">
+            <datalist id="tz-list">${(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : []).map((z) => `<option value="${z}">`).join('')}</datalist>
+          </div>
         </div>
         <h3 style="margin-top:1.25rem">Anti-cheating</h3>
         <div class="field">
@@ -410,7 +415,7 @@
     $('#settings').onsubmit = action(async () => {
       const num = (v) => (v === '' ? null : Number(v));
       await api('PATCH', `/api/classes/${c.id}`, {
-        name: $('#n').value, code: $('#code').value, late_after_min: Number($('#late').value),
+        name: $('#n').value, code: $('#code').value, timezone: $('#tz').value, late_after_min: Number($('#late').value),
         enroll_open: $('#enroll').checked, roster_only: $('#ronly').checked,
         geo_enabled: $('#geo').checked, geo_lat: num($('#lat').value), geo_lng: num($('#lng').value), geo_radius_m: Number($('#rad').value),
       });

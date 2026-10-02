@@ -7,7 +7,7 @@ const sec = require('../lib/security');
 let server, base, app;
 
 before(async () => {
-  app = createApp({ dbFile: ':memory:', publicUrl: '', rotateMs: 10000, graceWindows: 2 });
+  app = createApp({ databaseUrl: '', dataDir: 'memory://', publicUrl: '', rotateMs: 10000, graceWindows: 2 });
   server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -36,6 +36,7 @@ function client() {
   return { call, jar };
 }
 
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
@@ -45,7 +46,7 @@ test('full attendance flow with anti-cheating rules', async () => {
   // Second sign-up is blocked by default.
   assert.equal((await client().call('POST', '/api/auth/signup', { username: 'other', password: 'password123' })).status, 403);
 
-  const { data: { id: classId } } = await prof.call('POST', '/api/classes', { name: 'Biology 101', code: 'BIO101' });
+  const { data: { id: classId } } = await prof.call('POST', '/api/classes', { name: 'Biology 101', code: 'BIO101', timezone: TZ });
 
   // Mon/Wed/Fri for ~3 months.
   const start = new Date();
@@ -112,7 +113,7 @@ test('full attendance flow with anti-cheating rules', async () => {
   assert.equal(r.status, 410);
 
   // An old code (e.g. a forwarded screenshot) is rejected.
-  const s = app.locals.db.prepare('SELECT secret FROM sessions WHERE id = ?').get(sessionId);
+  const s = await (await app.locals.dbReady).one('SELECT secret FROM sessions WHERE id = $1', [sessionId]);
   const stale = sec.qrToken(sessionId, s.secret, 10000, Date.now() - 60000).token;
   r = await client().call('POST', '/api/checkin/scan', { token: stale });
   assert.equal(r.status, 410);
@@ -171,7 +172,7 @@ test('full attendance flow with anti-cheating rules', async () => {
 test('roster-only classes reject unknown IDs', async () => {
   const prof = client();
   await prof.call('POST', '/api/auth/login', { username: 'prof', password: 'password123' });
-  const { data: { id } } = await prof.call('POST', '/api/classes', { name: 'Chem', roster_only: true });
+  const { data: { id } } = await prof.call('POST', '/api/classes', { name: 'Chem', roster_only: true, timezone: TZ });
   await prof.call('PUT', `/api/classes/${id}/roster`, { text: 'student id, name\nR100, Rana Haddad\nR101; Omar' });
   const room = await prof.call('GET', `/api/classes/${id}`);
   assert.equal(room.data.roster.length, 2);
