@@ -111,19 +111,25 @@
     let mode = st.setupNeeded ? 'signup' : 'login';
     const draw = () => {
       app.innerHTML = `
-        <div class="narrow">
-          <div class="center" style="margin-bottom:1.5rem">
-            <div class="brand-mark" style="width:48px;height:48px;font-size:24px;margin:0 auto .75rem">✓</div>
-            <h1>Class Attendance</h1>
-            <p class="muted">${mode === 'signup' ? (st.setupNeeded ? 'Create the first instructor account to get started.' : 'Create an instructor account.') : 'Instructor log in'}</p>
-          </div>
-          <form class="card" id="auth">
+        <div class="auth">
+          <section class="auth-brand">
+            <img src="/brand/lau-logo-white.svg" alt="Lebanese American University">
+            <div>
+              <h1 class="page-title">Class <b>Attendance</b></h1>
+              <p>Rotating QR codes for every class session. Students check in from their own phone, in the room.</p>
+            </div>
+          </section>
+          <section class="auth-form"><div>
+          <h2>${mode === 'signup' ? 'Create account' : 'Instructor log in'}</h2>
+          <p class="muted">${mode === 'signup' ? (st.setupNeeded ? 'Create the first instructor account to get started.' : 'Create an instructor account.') : 'Sign in to manage your classes.'}</p>
+          <form id="auth">
             <div id="err"></div>
             <div class="field"><label for="u">Username</label><input id="u" type="text" autocomplete="username" required></div>
             <div class="field"><label for="p">Password</label><input id="p" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" required minlength="${mode === 'signup' ? 8 : 1}"></div>
             <button class="primary full" type="submit">${mode === 'signup' ? 'Create account' : 'Log in'}</button>
           </form>
-          ${st.signupAllowed && !st.setupNeeded ? `<p class="center"><a href="#" id="switch">${mode === 'signup' ? 'I already have an account' : 'Create an account'}</a></p>` : ''}
+          ${st.signupAllowed && !st.setupNeeded ? `<p style="margin-top:1rem"><a href="#" id="switch">${mode === 'signup' ? 'I already have an account' : 'Create an account'}</a></p>` : ''}
+          </div></section>
         </div>`;
       $('#auth').onsubmit = async (e) => {
         e.preventDefault();
@@ -147,7 +153,7 @@
     app.innerHTML = `
       <div class="wrap">
         <div class="row between" style="margin-bottom:1rem">
-          <h1 style="margin:0">Your classes</h1>
+          <h1 class="page-title">Your <b>classes</b></h1>
         </div>
         ${classes.length ? `<div class="grid" style="margin-bottom:1.5rem">${classes.map((c) => `
           <a class="card class-card" href="#/class/${c.id}">
@@ -460,7 +466,7 @@
           <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr));margin-bottom:1rem">
             <div class="card center"><div class="muted">Present</div><div style="font-size:1.6rem;font-weight:700;color:var(--ok)">${count('present')}</div></div>
             <div class="card center"><div class="muted">Late</div><div style="font-size:1.6rem;font-weight:700;color:var(--warn)">${count('late')}</div></div>
-            <div class="card center"><div class="muted">Excused</div><div style="font-size:1.6rem;font-weight:700;color:var(--accent)">${count('excused')}</div></div>
+            <div class="card center"><div class="muted">Excused</div><div style="font-size:1.6rem;font-weight:700;color:var(--info)">${count('excused')}</div></div>
             <div class="card center"><div class="muted">Absent</div><div style="font-size:1.6rem;font-weight:700;color:var(--bad)">${absent}</div></div>
           </div>
           ${flagged ? `<div class="notice warn">⚠ ${flagged} check-in${flagged === 1 ? '' : 's'} came from an identical browser on the same network within minutes of each other. That can mean one phone was used for two people (e.g. via a private tab) – or just two friends with the same phone model. Worth a glance.</div>` : ''}
@@ -517,6 +523,7 @@
     document.body.style.overflow = 'hidden';
     app.innerHTML = `
       <div class="present">
+        <img class="present-logo" src="/brand/lau-logo-green.svg" alt="Lebanese American University">
         <div class="controls">
           <button class="small" id="fs">⛶ Full screen</button>
           <button class="small" id="exit">✕ Exit</button>

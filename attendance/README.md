@@ -67,6 +67,13 @@ Each class has its own **time zone** (Settings tab). It is taken from your brows
 5. Click **Close attendance**, then fix individual statuses if needed (for example, mark someone excused).
 6. After the first week or two, turn off **Allow new phones to register** under **Settings**.
 
+## Branding
+
+The interface follows the LAU visual identity guidelines (Stratcom):
+- **Colors:** Dark Green `#006751` is the dominant color and Anthracite `#3A3E3F` is the text color. The secondary greens and tertiary colors are used only for states and highlights.
+- **Fonts:** Raleway for headings and PT Sans, the guide's web typeface, for body text. Both are self-hosted from `public/fonts` under the SIL Open Font License.
+- **Logo:** the official logo is extracted unaltered from the style guide: `public/brand/lau-logo-white.svg` on Dark Green and `public/brand/lau-logo-green.svg` on white. It sits top-left, with clear space of at least the height of the "L", and is never shown below the minimum size.
+
 ## Development
 
 ```bash
