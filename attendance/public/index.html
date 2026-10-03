@@ -3,18 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Class Attendance</title>
+  <meta name="theme-color" content="#006751">
+  <title>Class Attendance · LAU</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="topbar" id="topbar" hidden>
-    <a class="brand" href="#/"><span class="brand-mark">✓</span> Attendance</a>
+    <a class="brand" href="#/">
+      <img class="brand-logo" src="/brand/lau-logo-white.svg" alt="Lebanese American University">
+      <span class="app-name">Class <b>Attendance</b></span>
+    </a>
     <div class="row">
       <span class="muted" id="whoami"></span>
       <button class="small" id="logout">Log out</button>
     </div>
   </header>
   <main id="app"><div class="spinner"></div></main>
+  <div class="band" aria-hidden="true"></div>
   <script src="/app.js"></script>
 </body>
 </html>
