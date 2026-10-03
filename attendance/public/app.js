@@ -67,6 +67,7 @@
   const EVENT_LABELS = {
     expired_code: ['warn', 'Expired code'],
     too_far: ['bad', 'Outside classroom'],
+    imprecise_location: ['warn', 'Imprecise location'],
     id_on_other_phone: ['bad', 'ID on 2nd phone'],
     phone_reused: ['bad', 'Phone reused'],
     not_on_roster: ['warn', 'Not on roster'],
@@ -378,7 +379,7 @@
         </div>
         <div class="field">
           <label class="check"><input type="checkbox" id="geo" ${c.geo_enabled ? 'checked' : ''}>
-            <span>Require students to be in the classroom (location check)<div class="hint">Students' phones share their location when checking in; anyone farther than the radius is rejected. Requires the site to be served over HTTPS.</div></span></label>
+            <span>Require students to be in the classroom (location check)<div class="hint">Students' phones share their GPS location when checking in. Anyone farther than the radius is rejected, and so are vague readings (worse than ±75 m), so students may need Precise Location turned on.</div></span></label>
         </div>
         <div id="geo-fields" class="card" style="background:var(--surface-2);box-shadow:none">
           <div class="inline-fields">

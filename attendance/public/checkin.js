@@ -77,21 +77,42 @@
       <p class="center muted"><small>Checked in at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. You can close this page.</small></p>`;
   }
 
+  // Watch the position for a few seconds and keep the most precise reading:
+  // the first fix indoors is often coarse (Wi-Fi/cell) and improves quickly.
   function getLocation() {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject(new Error('Your browser does not support location.'));
-      navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
-        (e) => reject(new Error(e.code === 1
-          ? 'Location access was blocked. This class requires your location to confirm you are in the classroom. Enable location for this site in your browser settings, then try again.'
-          : 'Could not get your location. Make sure location services are on, then try again.')),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      let best = null;
+      let done = false;
+      const finish = (err) => {
+        if (done) return;
+        done = true;
+        navigator.geolocation.clearWatch(watch);
+        clearTimeout(timer);
+        if (best) resolve(best);
+        else reject(err || new Error('Could not get your location. Make sure location services are on, then try again.'));
+      };
+      const watch = navigator.geolocation.watchPosition(
+        (p) => {
+          const r = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy };
+          if (!best || r.accuracy < best.accuracy) best = r;
+          const hint = document.getElementById('loc-hint');
+          if (hint) hint.textContent = `Location accuracy: ±${Math.round(best.accuracy)} m`;
+          if (best.accuracy <= 30) finish();
+        },
+        (e) => {
+          if (e.code === 1) {
+            finish(new Error('Location access was blocked. This class requires your location to confirm you are in the classroom. Enable location for this site in your browser settings, then try again.'));
+          }
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
       );
+      const timer = setTimeout(() => finish(), 12000);
     });
   }
 
   async function confirm() {
-    app.innerHTML = `${header()}<div class="spinner"></div><p class="center muted">${session.needsLocation ? 'Checking your location…' : 'Checking you in…'}</p>`;
+    app.innerHTML = `${header()}<div class="spinner"></div><p class="center muted">${session.needsLocation ? 'Checking your location…' : 'Checking you in…'}</p>${session.needsLocation ? '<p class="center muted" id="loc-hint"></p>' : ''}`;
     try {
       const body = { claim, localId: localId(), fingerprint: fingerprint() };
       if (session.needsLocation) Object.assign(body, await getLocation());
