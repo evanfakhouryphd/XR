@@ -117,6 +117,9 @@ test('full attendance flow with anti-cheating rules', async () => {
   const stale = sec.qrToken(sessionId, s.secret, 10000, Date.now() - 60000).token;
   r = await client().call('POST', '/api/checkin/scan', { token: stale });
   assert.equal(r.status, 410);
+  // A request without a body is a clean 400, not a crash.
+  r = await fetch(base + '/api/checkin/scan', { method: 'POST' });
+  assert.equal(r.status, 400);
   // Tampered code rejected.
   r = await client().call('POST', '/api/checkin/scan', { token: token.slice(0, -2) + 'xx' });
   assert.equal(r.status, 400);
