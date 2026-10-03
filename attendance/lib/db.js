@@ -118,9 +118,14 @@ function pgDriver(url) {
   const pg = require('pg');
   pg.types.setTypeParser(INT8, Number);
   const local = /localhost|127\.0\.0\.1/.test(url);
+  const noSsl = local || /sslmode=disable/.test(url);
+  // Hosted Postgres URLs (Neon, Supabase) carry sslmode=require, which pg now
+  // treats as full certificate verification and which would override the ssl
+  // option below; drop it so the explicit setting applies.
+  const connectionString = url.replace(/([?&])sslmode=[^&]*&?/, '$1').replace(/[?&]$/, '');
   const pool = new pg.Pool({
-    connectionString: url,
-    ssl: local || /sslmode=disable/.test(url) ? false : { rejectUnauthorized: false },
+    connectionString,
+    ssl: noSsl ? false : { rejectUnauthorized: false },
     max: Number(process.env.DB_POOL_MAX || 3),
   });
   return {
