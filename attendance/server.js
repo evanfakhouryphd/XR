@@ -47,6 +47,8 @@ function createApp(opts = {}) {
   if (cfg.trustProxy) app.set('trust proxy', true);
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
+  // Express 5 leaves req.body undefined when a request has no body.
+  app.use((req, res, next) => { req.body ??= {}; next(); });
 
   const all = (sql, params) => db.query(sql, params);
   const one = (sql, params) => db.one(sql, params);
