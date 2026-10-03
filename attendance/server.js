@@ -14,6 +14,10 @@ const config = {
   rotateMs: Number(process.env.QR_ROTATE_SECONDS || 10) * 1000,
   graceWindows: Number(process.env.QR_GRACE_WINDOWS || 2),
   claimMs: Number(process.env.CHECKIN_WINDOW_MINUTES || 5) * 60 * 1000,
+  // Location check: readings vaguer than this are rejected, and at most this
+  // much of a reading's uncertainty is forgiven on top of the class radius.
+  geoMaxAccuracyM: Number(process.env.GEO_MAX_ACCURACY_M || 75),
+  geoSlackM: Number(process.env.GEO_SLACK_M || 30),
   allowSignup: process.env.ALLOW_SIGNUP === '1',
   trustProxy: process.env.TRUST_PROXY === '1' || !!process.env.VERCEL,
 };
@@ -609,13 +613,17 @@ function createApp(opts = {}) {
     if (s.geo_enabled) {
       lat = Number(req.body.lat);
       lng = Number(req.body.lng);
-      const accuracy = Math.min(Math.max(Number(req.body.accuracy) || 0, 0), 1000);
+      const accuracy = Number(req.body.accuracy);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         throw new HttpError(400, 'Location is required for this class. Allow location access and try again.', { needsLocation: true });
       }
       distance = sec.distanceMeters(lat, lng, s.geo_lat, s.geo_lng);
-      // Give the benefit of the doubt for GPS accuracy, up to a cap.
-      if (distance - Math.min(accuracy, 150) > s.geo_radius_m) {
+      if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > cfg.geoMaxAccuracyM) {
+        await log('imprecise_location', `Location too imprecise (±${Number.isFinite(accuracy) ? Math.round(accuracy) : '?'} m, ${Math.round(distance)} m from the classroom).`);
+        throw new HttpError(400, `Your phone's location is too imprecise right now (±${Number.isFinite(accuracy) ? Math.round(accuracy) : '?'} m). Turn on Precise Location for your browser, move near a window if you can, and try again.`, { needsLocation: true });
+      }
+      // Forgive a little GPS uncertainty, but never more than geoSlackM.
+      if (distance - Math.min(accuracy, cfg.geoSlackM) > s.geo_radius_m) {
         await log('too_far', `Checked in ${Math.round(distance)} m from the classroom (allowed ${s.geo_radius_m} m).`);
         throw new HttpError(403, `You appear to be ${Math.round(distance)} m away from the classroom. You need to be in class to check in.`);
       }

@@ -133,6 +133,16 @@ test('full attendance flow with anti-cheating rules', async () => {
   assert.equal(r.status, 400); // location required
   r = await bob.call('POST', '/api/checkin/confirm', { claim: cb, lat: 33.95, lng: 35.6, accuracy: 20 });
   assert.equal(r.status, 403);
+  // Too vague a reading is rejected, even if it happens to point at the room.
+  r = await bob.call('POST', '/api/checkin/confirm', { claim: cb, lat: 33.8939, lng: 35.5019, accuracy: 200 });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /imprecise/);
+  // ~160 m away with ±60 m: the old lenient rule allowed this, now only 30 m of slack applies.
+  r = await bob.call('POST', '/api/checkin/confirm', { claim: cb, lat: 33.8938 + 0.00144, lng: 35.5018, accuracy: 60 });
+  assert.equal(r.status, 403);
+  // ~120 m away with ±25 m: within 100 m radius + 25 m slack.
+  r = await bob.call('POST', '/api/checkin/confirm', { claim: cb, lat: 33.8938 + 0.00108, lng: 35.5018, accuracy: 25 });
+  assert.equal(r.status, 200);
   r = await bob.call('POST', '/api/checkin/confirm', { claim: cb, lat: 33.8939, lng: 35.5019, accuracy: 15 });
   assert.equal(r.status, 200);
 
@@ -157,6 +167,7 @@ test('full attendance flow with anti-cheating rules', async () => {
   assert.equal(detail.data.attendance.length, 3);
   assert.ok(detail.data.events.some((e) => e.kind === 'expired_code'));
   assert.ok(detail.data.events.some((e) => e.kind === 'too_far'));
+  assert.ok(detail.data.events.some((e) => e.kind === 'imprecise_location'));
   assert.ok(detail.data.events.some((e) => e.kind === 'id_on_other_phone'));
 
   const csv = await prof.call('GET', `/api/classes/${classId}/report.csv`);

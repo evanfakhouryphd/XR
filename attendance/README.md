@@ -52,6 +52,8 @@ Students' phones can't reach `localhost`. To try it with real phones, run `npx c
 | `QR_ROTATE_SECONDS` | `10` | How often the QR code changes |
 | `QR_GRACE_WINDOWS` | `2` | How many earlier codes are still accepted (allows for slow scans) |
 | `CHECKIN_WINDOW_MINUTES` | `5` | Time a first-time student has to fill in the registration form after scanning |
+| `GEO_MAX_ACCURACY_M` | `75` | Location check: readings less precise than this are rejected (the student is asked to turn on Precise Location) |
+| `GEO_SLACK_M` | `30` | Location check: the most GPS uncertainty forgiven on top of the class radius |
 | `PORT`, `DATA_DIR`, `TRUST_PROXY` | | Settings for running on your own server |
 
 Each class has its own **time zone** (Settings tab). It is taken from your browser when you create the class and is used for "today" and for marking students late.
