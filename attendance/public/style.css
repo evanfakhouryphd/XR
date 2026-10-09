@@ -107,7 +107,10 @@ code { font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-
   border-left: 1px solid rgba(255, 255, 255, .45); padding-left: 20px; line-height: 1.15;
 }
 .app-name b { font-weight: 800; display: block; }
-.topbar .muted { color: rgba(255, 255, 255, .8); }
+.topnav { gap: 1.1rem; }
+.topnav a { color: #fff; font-weight: 700; font-size: .92rem; }
+.topnav a#whoami { font-weight: 400; color: rgba(255, 255, 255, .85); }
+.topnav a:hover { text-decoration: underline; }
 .topbar button { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .6); }
 .topbar button:hover { background: var(--green-dark); }
 @media (max-width: 640px) {
@@ -115,7 +118,9 @@ code { font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-
   .brand { gap: 14px; }
   .brand-logo { width: 128px; }
   .app-name { padding-left: 14px; font-size: .8rem; }
-  .topbar #whoami { display: none; }
+  .topbar { flex-wrap: wrap; row-gap: 10px; }
+  .topnav { gap: .9rem; width: 100%; justify-content: flex-end; }
+  .topnav a#whoami { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* The green band that closes every page of the guide. */

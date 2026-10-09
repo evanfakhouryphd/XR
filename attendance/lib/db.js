@@ -110,6 +110,23 @@ CREATE TABLE IF NOT EXISTS events (
   created_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_class ON events (class_id, created_at);
+
+-- Roles: the admin manages classes and instructors; instructors run the
+-- sessions of the classes they are assigned to.
+ALTER TABLE instructors ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'instructor';
+ALTER TABLE instructors ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE instructors ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+-- Existing installs: the first account becomes the admin.
+UPDATE instructors SET role = 'admin'
+  WHERE id = (SELECT MIN(id) FROM instructors)
+    AND NOT EXISTS (SELECT 1 FROM instructors WHERE role = 'admin');
+
+CREATE TABLE IF NOT EXISTS class_instructors (
+  class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  instructor_id INTEGER NOT NULL REFERENCES instructors(id) ON DELETE CASCADE,
+  PRIMARY KEY (class_id, instructor_id)
+);
+CREATE INDEX IF NOT EXISTS class_instructors_instructor ON class_instructors (instructor_id);
 `;
 
 const INT8 = 20;

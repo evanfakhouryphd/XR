@@ -93,19 +93,39 @@ function createApp(opts = {}) {
   async function currentInstructor(req) {
     const token = parseCookies(req)[AUTH_COOKIE];
     if (!token) return null;
-    return one(`SELECT i.id, i.username FROM auth_sessions a JOIN instructors i ON i.id = a.instructor_id
+    const u = await one(`SELECT i.id, i.username, i.display_name, i.role, i.must_change_password
+                FROM auth_sessions a JOIN instructors i ON i.id = a.instructor_id
                 WHERE a.token_hash = $1 AND a.expires_at > $2`, [sec.sha256(token), now()]);
+    return u && { ...u, isAdmin: u.role === 'admin' };
   }
 
   async function requireAuth(req, res, next) {
     try {
       const user = await currentInstructor(req);
       if (!user) return res.status(401).json({ error: 'Please log in.' });
+      // A temporary password must be replaced before anything else.
+      if (user.must_change_password && !req.path.startsWith('/api/auth/')) {
+        return res.status(403).json({ error: 'Please choose a new password first.', mustChangePassword: true });
+      }
       req.user = user;
       next();
     } catch (err) {
       next(err);
     }
+  }
+
+  function requireAdmin(req, res, next) {
+    if (!req.user?.isAdmin) return res.status(403).json({ error: 'Only the administrator can do this.' });
+    next();
+  }
+
+  // Readable one-time password, e.g. "k7mq-x4tp-9vhr" (no 0/o/1/l/i).
+  function tempPassword() {
+    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const bytes = require('node:crypto').randomBytes(12);
+    let out = '';
+    for (let i = 0; i < 12; i++) out += alphabet[bytes[i] % alphabet.length] + (i % 4 === 3 && i < 11 ? '-' : '');
+    return out;
   }
 
   async function startAuthSession(req, res, instructorId) {
@@ -140,8 +160,9 @@ function createApp(opts = {}) {
     if (username.length < 3) throw new HttpError(400, 'Username must be at least 3 characters.');
     if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
     if (await one('SELECT 1 FROM instructors WHERE lower(username) = lower($1)', [username])) throw new HttpError(409, 'That username is taken.');
-    const row = await one('INSERT INTO instructors (username, pass_hash, created_at) VALUES ($1,$2,$3) RETURNING id',
-      [username, sec.hashPassword(password), now()]);
+    const role = (await instructorCount()) === 0 ? 'admin' : 'instructor';
+    const row = await one('INSERT INTO instructors (username, pass_hash, role, display_name, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+      [username, sec.hashPassword(password), role, str(req.body.displayName, 120), now()]);
     await startAuthSession(req, res, row.id);
     res.json({ ok: true });
   });
@@ -164,6 +185,77 @@ function createApp(opts = {}) {
     res.json({ ok: true });
   });
 
+  app.post('/api/auth/password', requireAuth, async (req, res) => {
+    const current = String(req.body.current || '');
+    const next = String(req.body.password || '');
+    const row = await one('SELECT pass_hash FROM instructors WHERE id = $1', [req.user.id]);
+    if (!sec.verifyPassword(current, row.pass_hash)) throw new HttpError(400, 'Your current password is not correct.');
+    if (next.length < 8) throw new HttpError(400, 'The new password must be at least 8 characters.');
+    if (next === current) throw new HttpError(400, 'Choose a password different from the current one.');
+    await all('UPDATE instructors SET pass_hash = $1, must_change_password = FALSE WHERE id = $2', [sec.hashPassword(next), req.user.id]);
+    // Sign out every other device that was using the old password.
+    const token = parseCookies(req)[AUTH_COOKIE];
+    await all('DELETE FROM auth_sessions WHERE instructor_id = $1 AND token_hash <> $2', [req.user.id, sec.sha256(token)]);
+    res.json({ ok: true });
+  });
+
+  // ------------------------------------------------------- instructors (admin)
+  async function instructorList() {
+    const people = await all(`SELECT id, username, display_name, role, must_change_password, created_at
+                              FROM instructors ORDER BY role = 'admin' DESC, lower(COALESCE(NULLIF(display_name, ''), username))`);
+    const links = await all(`SELECT ci.instructor_id, c.id, c.name, c.code FROM class_instructors ci
+                             JOIN classes c ON c.id = ci.class_id ORDER BY lower(c.name)`);
+    for (const p of people) p.classes = links.filter((l) => l.instructor_id === p.id).map(({ id, name, code }) => ({ id, name, code }));
+    return people;
+  }
+
+  app.get('/api/instructors', requireAuth, requireAdmin, async (req, res) => {
+    res.json(await instructorList());
+  });
+
+  app.post('/api/instructors', requireAuth, requireAdmin, async (req, res) => {
+    const username = str(req.body.username, 60);
+    const displayName = str(req.body.displayName, 120);
+    if (!/^[A-Za-z0-9._@-]{3,60}$/.test(username)) throw new HttpError(400, 'Usernames are 3+ characters: letters, numbers and . _ @ - only.');
+    if (await one('SELECT 1 FROM instructors WHERE lower(username) = lower($1)', [username])) throw new HttpError(409, 'That username is taken.');
+    const password = tempPassword();
+    const row = await one(`INSERT INTO instructors (username, pass_hash, role, display_name, must_change_password, created_at)
+                           VALUES ($1,$2,'instructor',$3,TRUE,$4) RETURNING id`, [username, sec.hashPassword(password), displayName, now()]);
+    const classIds = Array.isArray(req.body.classIds) ? req.body.classIds.map(Number).filter(Number.isInteger) : [];
+    if (classIds.length) {
+      await all(`INSERT INTO class_instructors (class_id, instructor_id)
+                 SELECT c.id, $1 FROM classes c WHERE c.id = ANY($2::int[]) ON CONFLICT DO NOTHING`, [row.id, classIds]);
+    }
+    res.json({ id: row.id, username, tempPassword: password });
+  });
+
+  async function otherInstructor(req) {
+    const target = await one('SELECT id, username, role FROM instructors WHERE id = $1', [idParam(req.params.id)]);
+    if (!target) throw new HttpError(404, 'Instructor not found.');
+    if (target.role === 'admin') throw new HttpError(400, 'The administrator account is managed from its own settings.');
+    return target;
+  }
+
+  app.patch('/api/instructors/:id', requireAuth, requireAdmin, async (req, res) => {
+    const target = await otherInstructor(req);
+    await all('UPDATE instructors SET display_name = $1 WHERE id = $2', [str(req.body.displayName, 120), target.id]);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/instructors/:id/reset-password', requireAuth, requireAdmin, async (req, res) => {
+    const target = await otherInstructor(req);
+    const password = tempPassword();
+    await all('UPDATE instructors SET pass_hash = $1, must_change_password = TRUE WHERE id = $2', [sec.hashPassword(password), target.id]);
+    await all('DELETE FROM auth_sessions WHERE instructor_id = $1', [target.id]);
+    res.json({ username: target.username, tempPassword: password });
+  });
+
+  app.delete('/api/instructors/:id', requireAuth, requireAdmin, async (req, res) => {
+    const target = await otherInstructor(req);
+    await all('DELETE FROM instructors WHERE id = $1', [target.id]);
+    res.json({ ok: true });
+  });
+
   // ------------------------------------------------------------- classes
   const idParam = (v) => {
     const n = Number(v);
@@ -171,17 +263,30 @@ function createApp(opts = {}) {
     return n;
   };
 
-  async function ownClass(req, id) {
-    const cls = await one('SELECT * FROM classes WHERE id = $1 AND instructor_id = $2', [idParam(id), req.user.id]);
+  // The admin can reach every class; an instructor only the classes they
+  // are assigned to. `manage` marks admin-only changes (schedule, settings,
+  // roster, instructors, deleting).
+  const canAccess = (req, alias = 'c') => (req.user.isAdmin
+    ? 'TRUE'
+    : `EXISTS (SELECT 1 FROM class_instructors ci WHERE ci.class_id = ${alias}.id AND ci.instructor_id = ${Number(req.user.id)})`);
+
+  function denyUnlessAdmin(req, manage) {
+    if (manage && !req.user.isAdmin) throw new HttpError(403, 'Only the administrator can change this.');
+  }
+
+  async function ownClass(req, id, { manage = false } = {}) {
+    const cls = await one(`SELECT c.* FROM classes c WHERE c.id = $1 AND ${canAccess(req)}`, [idParam(id)]);
     if (!cls) throw new HttpError(404, 'Class not found.');
+    denyUnlessAdmin(req, manage);
     return cls;
   }
 
-  async function ownSession(req, id) {
+  async function ownSession(req, id, { manage = false } = {}) {
     const s = await one(`SELECT s.*, c.name AS class_name, c.code AS class_code, c.late_after_min, c.geo_enabled, c.timezone
                  FROM sessions s JOIN classes c ON c.id = s.class_id
-                 WHERE s.id = $1 AND c.instructor_id = $2`, [idParam(id), req.user.id]);
+                 WHERE s.id = $1 AND ${canAccess(req)}`, [idParam(id)]);
     if (!s) throw new HttpError(404, 'Session not found.');
+    denyUnlessAdmin(req, manage);
     return s;
   }
 
@@ -205,7 +310,7 @@ function createApp(opts = {}) {
   }
 
   app.get('/api/classes', requireAuth, async (req, res) => {
-    const classes = await all('SELECT * FROM classes WHERE instructor_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    const classes = await all(`SELECT c.* FROM classes c WHERE ${canAccess(req)} ORDER BY c.created_at DESC`);
     for (const c of classes) {
       const t = await one(`SELECT COUNT(*) AS session_count, MIN(date) FILTER (WHERE date >= $2) AS next_date
                            FROM sessions WHERE class_id = $1`, [c.id, todayIn(c.timezone)]);
@@ -238,7 +343,7 @@ function createApp(opts = {}) {
     return out;
   }
 
-  app.post('/api/classes', requireAuth, async (req, res) => {
+  app.post('/api/classes', requireAuth, requireAdmin, async (req, res) => {
     const c = applyClassFields(req.body, { timezone: 'UTC', late_after_min: 15, roster_only: false, enroll_open: true, geo_enabled: false, geo_radius_m: 150, geo_lat: null, geo_lng: null, code: '' });
     const row = await one(`INSERT INTO classes (instructor_id, name, code, timezone, late_after_min, roster_only, enroll_open, geo_enabled, geo_lat, geo_lng, geo_radius_m, created_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
@@ -253,25 +358,27 @@ function createApp(opts = {}) {
         (SELECT COUNT(*) FROM attendance a WHERE a.session_id = s.id AND a.status IN ('present','late')) AS attended
       FROM sessions s WHERE s.class_id = $1 ORDER BY s.date, s.start_time`, [cls.id]);
     const roster = await all('SELECT student_number, name FROM roster WHERE class_id = $1 ORDER BY lower(name), student_number', [cls.id]);
-    res.json({ class: cls, today: todayIn(cls.timezone), sessions, roster, members: await classMembers(cls.id) });
+    const instructors = await all(`SELECT i.id, i.username, i.display_name FROM class_instructors ci
+      JOIN instructors i ON i.id = ci.instructor_id WHERE ci.class_id = $1 ORDER BY lower(COALESCE(NULLIF(i.display_name, ''), i.username))`, [cls.id]);
+    res.json({ class: cls, canManage: req.user.isAdmin, today: todayIn(cls.timezone), sessions, roster, members: await classMembers(cls.id), instructors });
   });
 
   app.patch('/api/classes/:id', requireAuth, async (req, res) => {
-    const c = applyClassFields(req.body, await ownClass(req, req.params.id));
+    const c = applyClassFields(req.body, await ownClass(req, req.params.id, { manage: true }));
     await all(`UPDATE classes SET name=$1, code=$2, timezone=$3, late_after_min=$4, roster_only=$5, enroll_open=$6, geo_enabled=$7, geo_lat=$8, geo_lng=$9, geo_radius_m=$10 WHERE id=$11`,
       [c.name, c.code, c.timezone, c.late_after_min, c.roster_only, c.enroll_open, c.geo_enabled, c.geo_lat, c.geo_lng, c.geo_radius_m, c.id]);
     res.json({ ok: true });
   });
 
   app.delete('/api/classes/:id', requireAuth, async (req, res) => {
-    const cls = await ownClass(req, req.params.id);
+    const cls = await ownClass(req, req.params.id, { manage: true });
     await all('DELETE FROM classes WHERE id = $1', [cls.id]);
     res.json({ ok: true });
   });
 
   // Generate sessions from a weekly pattern, e.g. Mon/Wed/Fri for 3 months.
   app.post('/api/classes/:id/schedule', requireAuth, async (req, res) => {
-    const cls = await ownClass(req, req.params.id);
+    const cls = await ownClass(req, req.params.id, { manage: true });
     const { startDate, endDate, startTime, endTime } = req.body;
     const weekdays = new Set((req.body.weekdays || []).map(Number).filter((d) => d >= 0 && d <= 6));
     if (!isDate(startDate) || !isDate(endDate)) throw new HttpError(400, 'Pick a start and end date.');
@@ -299,7 +406,7 @@ function createApp(opts = {}) {
   });
 
   app.post('/api/classes/:id/sessions', requireAuth, async (req, res) => {
-    const cls = await ownClass(req, req.params.id);
+    const cls = await ownClass(req, req.params.id, { manage: true });
     const { date, startTime, endTime } = req.body;
     if (!isDate(date) || !isTime(startTime) || !isTime(endTime) || endTime <= startTime) {
       throw new HttpError(400, 'Pick a valid date, start time and end time.');
@@ -312,7 +419,7 @@ function createApp(opts = {}) {
 
   // Roster: one student per line, "student_id, name" (CSV/TSV/semicolon).
   app.put('/api/classes/:id/roster', requireAuth, async (req, res) => {
-    const cls = await ownClass(req, req.params.id);
+    const cls = await ownClass(req, req.params.id, { manage: true });
     const rows = [];
     const seen = new Set();
     for (const line of String(req.body.text || '').split(/\r?\n/)) {
@@ -332,6 +439,19 @@ function createApp(opts = {}) {
       }
     });
     res.json({ count: rows.length });
+  });
+
+  app.put('/api/classes/:id/instructors', requireAuth, requireAdmin, async (req, res) => {
+    const cls = await ownClass(req, req.params.id, { manage: true });
+    const ids = Array.isArray(req.body.instructorIds) ? [...new Set(req.body.instructorIds.map(Number).filter(Number.isInteger))] : [];
+    await db.tx(async (tq) => {
+      await tq('DELETE FROM class_instructors WHERE class_id = $1', [cls.id]);
+      if (ids.length) {
+        await tq(`INSERT INTO class_instructors (class_id, instructor_id)
+                  SELECT $1, i.id FROM instructors i WHERE i.id = ANY($2::int[]) AND i.role = 'instructor'`, [cls.id, ids]);
+      }
+    });
+    res.json({ ok: true });
   });
 
   app.post('/api/classes/:id/students/:num/reset-device', requireAuth, async (req, res) => {
@@ -433,7 +553,7 @@ function createApp(opts = {}) {
   });
 
   app.delete('/api/sessions/:id', requireAuth, async (req, res) => {
-    const s = await ownSession(req, req.params.id);
+    const s = await ownSession(req, req.params.id, { manage: true });
     await all('DELETE FROM sessions WHERE id = $1', [s.id]);
     res.json({ ok: true });
   });

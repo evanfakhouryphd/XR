@@ -38,6 +38,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && !path.startsWith('/api/auth')) { user = null; route(); throw new Error('Please log in.'); }
+    if (res.status === 403 && data.mustChangePassword) { if (user) user.must_change_password = true; location.hash = '#/account'; route(); throw new Error(data.error); }
     if (!res.ok) throw new Error(data.error || 'Something went wrong.');
     return data;
   }
@@ -86,9 +87,12 @@
       if (!user) return renderAuth(st);
     }
     topbar.hidden = false;
-    $('#whoami').textContent = user.username;
+    $('#whoami').textContent = user.display_name || user.username;
+    $('#nav-instructors').hidden = !user.isAdmin || user.must_change_password;
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
     try {
+      if (user.must_change_password || parts[0] === 'account') return renderAccount();
+      if (parts[0] === 'instructors' && user.isAdmin) return await renderInstructors();
       if (parts[0] === 'class') return await renderClass(Number(parts[1]), parts[2] || 'sessions');
       if (parts[0] === 'session') return await renderSession(Number(parts[1]));
       if (parts[0] === 'present') return await renderPresent(Number(parts[1]));
@@ -155,22 +159,23 @@
         <div class="row between" style="margin-bottom:1rem">
           <h1 class="page-title">Your <b>classes</b></h1>
         </div>
+        ${!user.isAdmin && !classes.length ? '<div class="card empty">No classes are assigned to you yet. The administrator assigns instructors to classes.</div>' : ''}
         ${classes.length ? `<div class="grid" style="margin-bottom:1.5rem">${classes.map((c) => `
           <a class="card class-card" href="#/class/${c.id}">
             <div class="muted"><small>${esc(c.code || ' ')}</small></div>
             <h2>${esc(c.name)}</h2>
             <div class="muted"><small>${c.session_count} session${c.session_count === 1 ? '' : 's'}${c.next_date ? ` · next ${esc(fmtDate(c.next_date))}` : ''}</small></div>
-          </a>`).join('')}</div>` : '<div class="card empty">No classes yet – create your first one below.</div>'}
-        <form class="card" id="new-class" style="max-width:560px">
+          </a>`).join('')}</div>` : (user.isAdmin ? '<div class="card empty">No classes yet – create your first one below.</div>' : '')}
+        ${user.isAdmin ? `<form class="card" id="new-class" style="max-width:560px">
           <h2>New class</h2>
           <div class="inline-fields">
             <div class="field"><label for="cn">Class name</label><input id="cn" type="text" placeholder="Intro to Psychology" required></div>
             <div class="field"><label for="cc">Course code <span class="hint">(optional)</span></label><input id="cc" type="text" placeholder="PSY 101"></div>
           </div>
           <button class="primary" type="submit">Create class</button>
-        </form>
+        </form>` : ''}
       </div>`;
-    $('#new-class').onsubmit = action(async () => {
+    if (user.isAdmin) $('#new-class').onsubmit = action(async () => {
       const { id } = await api('POST', '/api/classes', { name: $('#cn').value, code: $('#cc').value, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
       location.hash = `#/class/${id}/sessions`;
     });
@@ -180,14 +185,17 @@
   async function renderClass(id, tab) {
     const data = await api('GET', `/api/classes/${id}`);
     const c = data.class;
-    const tabs = [['sessions', 'Schedule'], ['students', 'Students'], ['report', 'Report'], ['activity', 'Alerts'], ['settings', 'Settings']];
+    const tabs = [['sessions', 'Schedule'], ['students', 'Students'], ['report', 'Report'], ['activity', 'Alerts']];
+    if (data.canManage) tabs.push(['instructors', 'Instructors'], ['settings', 'Settings']);
+    if (!data.canManage && (tab === 'settings' || tab === 'instructors')) tab = 'sessions';
+    const teachers = data.instructors.map((i) => i.display_name || i.username);
     app.innerHTML = `
       <div class="wrap">
         <a href="#/" class="muted"><small>← All classes</small></a>
         <div class="row between">
           <div>
             <h1 style="margin:.25rem 0 0">${esc(c.name)}</h1>
-            <div class="muted">${esc(c.code)}</div>
+            <div class="muted">${esc(c.code)}${teachers.length ? `${c.code ? ' · ' : ''}Instructor${teachers.length === 1 ? '' : 's'}: ${esc(teachers.join(', '))}` : ''}</div>
           </div>
           <div class="row">
             ${c.geo_enabled ? '<span class="pill info" title="Students must be near the classroom">📍 Location check</span>' : ''}
@@ -203,10 +211,11 @@
     if (tab === 'report') return classReport(el, c);
     if (tab === 'activity') return classActivity(el, c);
     if (tab === 'settings') return classSettings(el, c);
+    if (tab === 'instructors') return classInstructors(el, data);
     return classSessions(el, data);
   }
 
-  function classSessions(el, { class: c, sessions, members, today: t }) {
+  function classSessions(el, { class: c, sessions, members, today: t, canManage }) {
     const d3 = new Date(`${t}T12:00:00`); d3.setMonth(d3.getMonth() + 3); const in3m = ymd(d3);
     const upcoming = sessions.filter((s) => s.date >= t);
     const past = sessions.filter((s) => s.date < t).reverse();
@@ -217,14 +226,14 @@
         <td>${statusPill(s.status)}</td>
         <td class="num">${s.status === 'scheduled' && s.date > t ? '' : `${s.attended}${members.length ? ` / ${members.length}` : ''}`}</td>
         <td class="num"><a class="btn small ${s.status === 'open' || s.date === t ? 'primary' : ''}" href="#/session/${s.id}">${s.status === 'open' ? 'Manage' : 'Open'}</a>
-            <button class="small ghost danger" data-del="${s.id}" title="Delete session">✕</button></td>
+            ${canManage ? `<button class="small ghost danger" data-del="${s.id}" title="Delete session">✕</button>` : ''}</td>
       </tr>`;
     const table = (list) => `<div class="table-scroll"><table class="session-list">
         <thead><tr><th>Date</th><th class="hide-sm">Time</th><th>Status</th><th class="num">Attended</th><th></th></tr></thead>
         <tbody>${list.map(row).join('')}</tbody></table></div>`;
 
     el.innerHTML = `
-      <div class="card">
+      ${canManage ? `<div class="card">
         <h2>Create a schedule</h2>
         <p class="muted">Pick the days the class meets and the date range. One session (with its own QR code) is created for each meeting.</p>
         <form id="sched">
@@ -251,14 +260,14 @@
           </div>
           <button type="submit">Add session</button>
         </form>
-      </div>
+      </div>` : ''}
       <div class="card">
         <h2>Today &amp; upcoming <span class="muted" style="font-weight:400">(${upcoming.length})</span></h2>
-        ${upcoming.length ? table(upcoming) : '<div class="empty">No upcoming sessions. Create a schedule above.</div>'}
+        ${upcoming.length ? table(upcoming) : `<div class="empty">No upcoming sessions.${canManage ? ' Create a schedule above.' : ''}</div>`}
       </div>
       ${past.length ? `<div class="card"><h2>Past <span class="muted" style="font-weight:400">(${past.length})</span></h2>${table(past)}</div>` : ''}`;
 
-    $('#sched').onsubmit = action(async () => {
+    if (canManage) $('#sched').onsubmit = action(async () => {
       const weekdays = $$('input[name=wd]:checked').map((i) => Number(i.value));
       const r = await api('POST', `/api/classes/${c.id}/schedule`, {
         weekdays, startDate: $('#sd').value, endDate: $('#ed').value, startTime: $('#st').value, endTime: $('#et').value,
@@ -266,8 +275,8 @@
       toast(r.created ? `Created ${r.created} session${r.created === 1 ? '' : 's'}` : 'No new sessions (they already exist)');
       route();
     });
-    $('#toggle-single').onclick = (e) => { e.preventDefault(); $('#single').hidden = !$('#single').hidden; };
-    $('#single').onsubmit = action(async () => {
+    if (canManage) $('#toggle-single').onclick = (e) => { e.preventDefault(); $('#single').hidden = !$('#single').hidden; };
+    if (canManage) $('#single').onsubmit = action(async () => {
       await api('POST', `/api/classes/${c.id}/sessions`, { date: $('#od').value, startTime: $('#ost').value, endTime: $('#oet').value });
       toast('Session added');
       route();
@@ -281,7 +290,7 @@
     });
   }
 
-  function classStudents(el, { class: c, roster, members }) {
+  function classStudents(el, { class: c, roster, members, canManage }) {
     el.innerHTML = `
       <div class="card">
         <h2>Students <span class="muted" style="font-weight:400">(${members.length})</span></h2>
@@ -294,15 +303,15 @@
             <td class="hide-sm">${m.on_roster ? '<span class="pill ok">Yes</span>' : '<span class="pill warn">No</span>'}</td>
             <td>${m.device_id ? `<span class="pill ok" title="${esc(m.user_agent || '')}">Registered</span> <small class="muted hide-sm">${esc(fmtDate(new Date(m.device_created_at).toISOString().slice(0, 10)))}</small>` : '<span class="pill">Not yet</span>'}</td>
             <td class="num">${m.device_id ? `<button class="small" data-reset="${esc(m.student_number)}">Reset phone</button>` : ''}</td>
-          </tr>`).join('')}</tbody></table></div>` : '<div class="empty">No students yet. Paste a roster below, or students will appear as they check in.</div>'}
+          </tr>`).join('')}</tbody></table></div>` : `<div class="empty">No students yet.${canManage ? ' Paste a roster below, or students' : ' Students'} will appear as they check in.</div>`}
       </div>
-      <form class="card" id="roster">
+      ${canManage ? `<form class="card" id="roster">
         <h2>Roster</h2>
         <p class="muted">Optional. One student per line: <code>student ID, full name</code>. You can paste straight from a spreadsheet. With a roster, names come from here and you can restrict check-in to listed students (Settings).</p>
         <textarea id="rt" placeholder="20231234, Jane Doe&#10;20231235, John Smith">${esc(roster.map((r) => `${r.student_number}, ${r.name}`).join('\n'))}</textarea>
         <div class="row" style="margin-top:.75rem"><button class="primary" type="submit">Save roster</button><span class="muted"><small>${roster.length} on roster</small></span></div>
-      </form>`;
-    $('#roster').onsubmit = action(async () => {
+      </form>` : ''}`;
+    if (canManage) $('#roster').onsubmit = action(async () => {
       const r = await api('PUT', `/api/classes/${c.id}/roster`, { text: $('#rt').value });
       toast(`Roster saved (${r.count} students)`);
       route();
@@ -433,6 +442,132 @@
       if (!confirm(`Delete "${c.name}" and all of its attendance records? This cannot be undone.`)) return;
       await api('DELETE', `/api/classes/${c.id}`);
       location.hash = '#/';
+    });
+  }
+
+  async function classInstructors(el, { class: c, instructors: assigned }) {
+    const all = (await api('GET', '/api/instructors')).filter((i) => i.role !== 'admin');
+    const on = new Set(assigned.map((i) => i.id));
+    el.innerHTML = `
+      <form class="card" id="assign" style="max-width:680px">
+        <h2>Instructors for this class</h2>
+        <p class="muted">Assigned instructors can open this class, start sessions, show the QR code, take attendance and see the report. Only you can change the schedule, settings and roster.</p>
+        ${all.length ? `<div class="stack">${all.map((i) => `
+          <label class="check"><input type="checkbox" name="inst" value="${i.id}" ${on.has(i.id) ? 'checked' : ''}>
+            <span>${esc(i.display_name || i.username)} <span class="muted">(${esc(i.username)})</span></span></label>`).join('')}</div>
+          <div class="row" style="margin-top:1rem"><button class="primary" type="submit">Save</button><a href="#/instructors">Add a new instructor</a></div>`
+        : '<div class="empty">No instructor accounts yet. <a href="#/instructors">Create one</a> first.</div>'}
+      </form>`;
+    const form = $('#assign');
+    if (all.length) form.onsubmit = action(async () => {
+      await api('PUT', `/api/classes/${c.id}/instructors`, { instructorIds: $$('input[name=inst]:checked').map((i) => Number(i.value)) });
+      toast('Instructors saved');
+      route();
+    });
+  }
+
+  // ------------------------------------------------------- instructors (admin)
+  function credentialsCard(username, password, fresh) {
+    const loginUrl = `${location.origin}/`;
+    const message = `Class attendance – LAU\nSign in at: ${loginUrl}\nUsername: ${username}\nTemporary password: ${password}\nYou'll be asked to choose your own password when you first sign in.`;
+    return `
+      <div class="notice ok" id="creds">
+        <strong>${fresh ? 'Account created' : 'Password reset'} for ${esc(username)}.</strong> Send these details to them – the temporary password is shown only once.
+        <pre style="white-space:pre-wrap;margin:.6rem 0;font:inherit;color:var(--anthracite);background:var(--surface);padding:.75rem;border:1px solid var(--border)">${esc(message)}</pre>
+        <button type="button" class="small" id="copy-creds">Copy message</button>
+      </div>`;
+  }
+
+  async function renderInstructors(flash) {
+    const [people, classes] = await Promise.all([api('GET', '/api/instructors'), api('GET', '/api/classes')]);
+    const instructors = people.filter((p) => p.role !== 'admin');
+    app.innerHTML = `
+      <div class="wrap">
+        <a href="#/" class="muted"><small>← All classes</small></a>
+        <h1 class="page-title" style="margin:.25rem 0 1.25rem">Instructor <b>accounts</b></h1>
+        ${flash || ''}
+        <div class="card">
+          <h2>Instructors <span class="muted" style="font-weight:400">(${instructors.length})</span></h2>
+          ${instructors.length ? `<div class="table-scroll"><table>
+            <thead><tr><th>Name</th><th>Username</th><th>Classes</th><th class="hide-sm">Status</th><th></th></tr></thead>
+            <tbody>${instructors.map((i) => `<tr>
+              <td>${esc(i.display_name || '—')}</td>
+              <td><code>${esc(i.username)}</code></td>
+              <td>${i.classes.length ? i.classes.map((c) => `<a class="pill info" href="#/class/${c.id}/instructors">${esc(c.code || c.name)}</a>`).join(' ') : '<span class="muted">None</span>'}</td>
+              <td class="hide-sm">${i.must_change_password ? '<span class="pill warn">Hasn’t signed in yet</span>' : '<span class="pill ok">Active</span>'}</td>
+              <td class="num" style="white-space:nowrap">
+                <button class="small" data-reset-pw="${i.id}">Reset password</button>
+                <button class="small ghost danger" data-remove="${i.id}" data-name="${esc(i.display_name || i.username)}">Remove</button>
+              </td></tr>`).join('')}</tbody></table></div>`
+          : '<div class="empty">No instructors yet. Add the first one below.</div>'}
+        </div>
+        <form class="card" id="new-inst" style="max-width:680px">
+          <h2>Add an instructor</h2>
+          <p class="muted">They get a temporary password to change at first sign-in. They can run sessions for the classes you pick; you keep control of schedules, settings and rosters.</p>
+          <div class="inline-fields">
+            <div class="field"><label for="in-name">Full name</label><input id="in-name" type="text" placeholder="Dr. Rana Haddad" required></div>
+            <div class="field"><label for="in-user">Username</label><input id="in-user" type="text" placeholder="rhaddad" autocomplete="off" autocapitalize="none" required pattern="[A-Za-z0-9._@\\-]{3,60}"><div class="hint">E.g. their LAU email or email name.</div></div>
+          </div>
+          ${classes.length ? `<div class="field"><label>Classes</label><div class="stack">${classes.map((c) => `
+            <label class="check"><input type="checkbox" name="in-class" value="${c.id}"><span>${esc(c.name)}${c.code ? ` <span class="muted">(${esc(c.code)})</span>` : ''}</span></label>`).join('')}</div></div>` : ''}
+          <button class="primary" type="submit">Create account</button>
+        </form>
+      </div>`;
+
+    const bindCopy = () => {
+      const btn = $('#copy-creds');
+      if (btn) btn.onclick = async () => {
+        try { await navigator.clipboard.writeText($('#creds pre').textContent); toast('Copied'); } catch { toast('Select the text and copy it'); }
+      };
+    };
+    bindCopy();
+    $('#new-inst').onsubmit = action(async () => {
+      const r = await api('POST', '/api/instructors', {
+        displayName: $('#in-name').value, username: $('#in-user').value.trim(),
+        classIds: $$('input[name=in-class]:checked').map((i) => Number(i.value)),
+      });
+      await renderInstructors(credentialsCard(r.username, r.tempPassword, true));
+    });
+    $$('[data-reset-pw]').forEach((b) => {
+      b.onclick = action(async () => {
+        if (!confirm('Give this instructor a new temporary password? They will be signed out everywhere.')) return;
+        const r = await api('POST', `/api/instructors/${b.dataset.resetPw}/reset-password`);
+        await renderInstructors(credentialsCard(r.username, r.tempPassword, false));
+      });
+    });
+    $$('[data-remove]').forEach((b) => {
+      b.onclick = action(async () => {
+        if (!confirm(`Remove ${b.dataset.name}? They will no longer be able to sign in. Their classes and attendance records stay.`)) return;
+        await api('DELETE', `/api/instructors/${b.dataset.remove}`);
+        toast('Instructor removed');
+        await renderInstructors();
+      });
+    });
+  }
+
+  // ----------------------------------------------------------------- account
+  function renderAccount() {
+    const forced = !!user.must_change_password;
+    app.innerHTML = `
+      <div class="narrow">
+        <h1 class="page-title" style="margin-bottom:1rem">Your <b>account</b></h1>
+        ${forced ? '<div class="notice warn">Welcome! You signed in with a temporary password. Choose your own password to continue.</div>' : ''}
+        <form class="card" id="pw">
+          <h2>Change password</h2>
+          <p class="muted">Signed in as <strong>${esc(user.display_name || user.username)}</strong> (${esc(user.username)})${user.isAdmin ? ' · administrator' : ''}.</p>
+          <div class="field"><label for="pw-cur">${forced ? 'Temporary password' : 'Current password'}</label><input id="pw-cur" type="password" autocomplete="current-password" required></div>
+          <div class="field"><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password" minlength="8" required><div class="hint">At least 8 characters.</div></div>
+          <div class="field"><label for="pw-new2">Repeat new password</label><input id="pw-new2" type="password" autocomplete="new-password" minlength="8" required></div>
+          <button class="primary" type="submit">Save password</button>
+        </form>
+      </div>`;
+    $('#pw').onsubmit = action(async () => {
+      if ($('#pw-new').value !== $('#pw-new2').value) throw new Error('The two new passwords do not match.');
+      await api('POST', '/api/auth/password', { current: $('#pw-cur').value, password: $('#pw-new').value });
+      user.must_change_password = false;
+      toast('Password saved');
+      location.hash = '#/';
+      route();
     });
   }
 

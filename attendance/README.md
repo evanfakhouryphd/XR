@@ -7,6 +7,12 @@ A small web app for taking attendance at university classes with QR codes.
 - **No typing after the first scan:** the first scan links the phone to the student's ID (a one-time form). After that, scanning checks them in right away.
 - **Reports:** a per-session list where you can change any student's status (present, late, excused or absent), a students × sessions grid with attendance rates, and a CSV download.
 
+## Admin and instructors
+
+- **Admin:** the first account created is the administrator. Only the admin creates classes, sets schedules, settings and rosters, and manages instructor accounts.
+- **Creating instructors:** go to **Instructors → Add an instructor** and pick their classes. The app makes a one-time password and shows a ready-to-send message (sign-in link, username, temporary password). The instructor must choose their own password at first sign-in. **Reset password** issues a new temporary one and signs them out everywhere.
+- **What instructors can do:** they see only the classes assigned to them, either from the Instructors page or from a class's **Instructors** tab. There they can start and close sessions, show the rotating QR code, mark attendance manually, reset a student's phone, and see the report and alerts.
+
 ## Anti-cheating
 
 | Trick | What stops it |
