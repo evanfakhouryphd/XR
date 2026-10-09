@@ -205,3 +205,74 @@ test('roster-only classes reject unknown IDs', async () => {
   const c = await x.call('POST', '/api/checkin/confirm', { claim });
   assert.equal(c.data.status, 'late'); // started at 00:00
 });
+
+test('admin creates instructors who can only run their assigned classes', async () => {
+  const admin = client();
+  await admin.call('POST', '/api/auth/login', { username: 'prof', password: 'password123' });
+  assert.equal((await admin.call('GET', '/api/auth/state')).data.user.role, 'admin');
+  const { data: { id: c1 } } = await admin.call('POST', '/api/classes', { name: 'Assigned class', timezone: TZ });
+  const { data: { id: c2 } } = await admin.call('POST', '/api/classes', { name: 'Other class', timezone: TZ });
+  const { data: { id: sid } } = await admin.call('POST', `/api/classes/${c1}/sessions`, { date: ymd(new Date()), startTime: '00:00', endTime: '23:59' });
+
+  // Create an instructor assigned to c1 with a one-time password.
+  const created = await admin.call('POST', '/api/instructors', { username: 'rana', displayName: 'Dr. Rana', classIds: [c1] });
+  assert.equal(created.status, 200);
+  assert.match(created.data.tempPassword, /^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$/);
+
+  const rana = client();
+  assert.equal((await rana.call('POST', '/api/auth/login', { username: 'rana', password: created.data.tempPassword })).status, 200);
+  // Must replace the temporary password before doing anything else.
+  let r = await rana.call('GET', '/api/classes');
+  assert.equal(r.status, 403);
+  assert.equal(r.data.mustChangePassword, true);
+  assert.equal((await rana.call('POST', '/api/auth/password', { current: 'wrong', password: 'new-password-1' })).status, 400);
+  assert.equal((await rana.call('POST', '/api/auth/password', { current: created.data.tempPassword, password: 'new-password-1' })).status, 200);
+
+  // Sees only the assigned class.
+  r = await rana.call('GET', '/api/classes');
+  assert.deepEqual(r.data.map((c) => c.id), [c1]);
+  assert.equal((await rana.call('GET', `/api/classes/${c2}`)).status, 404);
+  const detail = await rana.call('GET', `/api/classes/${c1}`);
+  assert.equal(detail.data.canManage, false);
+  assert.deepEqual(detail.data.instructors.map((i) => i.username), ['rana']);
+
+  // Can run the session: open, show QR, mark attendance, close.
+  assert.equal((await rana.call('POST', `/api/sessions/${sid}/open`)).status, 200);
+  assert.equal((await rana.call('GET', `/api/sessions/${sid}/qr`)).status, 200);
+  assert.equal((await rana.call('PUT', `/api/sessions/${sid}/attendance/X1`, { status: 'present' })).status, 200);
+  assert.equal((await rana.call('GET', `/api/classes/${c1}/report`)).status, 200);
+  assert.equal((await rana.call('POST', `/api/sessions/${sid}/close`)).status, 200);
+
+  // Cannot manage: settings, schedule, roster, deleting, creating classes, instructors.
+  assert.equal((await rana.call('PATCH', `/api/classes/${c1}`, { name: 'Hacked' })).status, 403);
+  assert.equal((await rana.call('POST', `/api/classes/${c1}/schedule`, { weekdays: [1], startDate: ymd(new Date()), endDate: ymd(new Date()), startTime: '09:00', endTime: '10:00' })).status, 403);
+  assert.equal((await rana.call('PUT', `/api/classes/${c1}/roster`, { text: 'A1, x' })).status, 403);
+  assert.equal((await rana.call('DELETE', `/api/sessions/${sid}`)).status, 403);
+  assert.equal((await rana.call('DELETE', `/api/classes/${c1}`)).status, 403);
+  assert.equal((await rana.call('POST', '/api/classes', { name: 'Mine' })).status, 403);
+  assert.equal((await rana.call('GET', '/api/instructors')).status, 403);
+  assert.equal((await rana.call('PUT', `/api/classes/${c1}/instructors`, { instructorIds: [] })).status, 403);
+
+  // Admin reassigns: rana moves to c2 only.
+  const list = await admin.call('GET', '/api/instructors');
+  const ranaId = list.data.find((i) => i.username === 'rana').id;
+  await admin.call('PUT', `/api/classes/${c1}/instructors`, { instructorIds: [] });
+  await admin.call('PUT', `/api/classes/${c2}/instructors`, { instructorIds: [ranaId] });
+  r = await rana.call('GET', '/api/classes');
+  assert.deepEqual(r.data.map((c) => c.id), [c2]);
+
+  // Password reset signs rana out and requires a new password again.
+  const reset = await admin.call('POST', `/api/instructors/${ranaId}/reset-password`);
+  assert.equal((await rana.call('GET', '/api/classes')).status, 401);
+  const rana2 = client();
+  await rana2.call('POST', '/api/auth/login', { username: 'rana', password: reset.data.tempPassword });
+  assert.equal((await rana2.call('GET', '/api/classes')).status, 403);
+
+  // The admin account cannot be removed or reset through these endpoints.
+  const adminId = list.data.find((i) => i.role === 'admin').id;
+  assert.equal((await admin.call('DELETE', `/api/instructors/${adminId}`)).status, 400);
+  // Removing an instructor keeps the classes.
+  assert.equal((await admin.call('DELETE', `/api/instructors/${ranaId}`)).status, 200);
+  assert.equal((await admin.call('GET', `/api/classes/${c2}`)).status, 200);
+  assert.equal((await rana2.call('POST', '/api/auth/login', { username: 'rana', password: reset.data.tempPassword })).status, 401);
+});
