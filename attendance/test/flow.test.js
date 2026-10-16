@@ -108,6 +108,33 @@ test('full attendance flow with anti-cheating rules', async () => {
   assert.equal(r.status, 409);
   assert.match(r.data.error, /another phone/);
 
+  // Cara registered on an earlier day, then the browser lost its cookie (e.g.
+  // the iOS code-scanner viewer). Same localStorage id: quietly re-linked.
+  const db = await app.locals.dbReady;
+  const cara = client();
+  let ce = (await cara.call('POST', '/api/checkin/scan', { token })).data.claim;
+  await cara.call('POST', '/api/checkin/register', { claim: ce, studentNumber: 'S5', name: 'Cara', localId: 'phoneE' });
+  const caraFresh = client();
+  ce = (await caraFresh.call('POST', '/api/checkin/scan', { token })).data.claim;
+  r = await caraFresh.call('POST', '/api/checkin/register', { claim: ce, studentNumber: 'S5', name: 'Cara', localId: 'phoneE' });
+  assert.equal(r.status, 200);
+  r = await caraFresh.call('POST', '/api/checkin/confirm', { claim: ce, localId: 'phoneE' });
+  assert.equal(r.data.status, 'present');
+  assert.equal((await db.one('SELECT COUNT(*) AS n FROM devices WHERE student_number = $1', ['S5'])).n, 1);
+
+  // Dan registered before but not yet checked in today; a different browser
+  // with no shared storage moves the ID there and the old phone stops working.
+  const dan = client();
+  let cd = (await dan.call('POST', '/api/checkin/scan', { token })).data.claim;
+  await dan.call('POST', '/api/checkin/register', { claim: cd, studentNumber: 'S4', name: 'Dan', localId: 'phoneD' });
+  const danNew = client();
+  const cd2 = (await danNew.call('POST', '/api/checkin/scan', { token })).data.claim;
+  r = await danNew.call('POST', '/api/checkin/register', { claim: cd2, studentNumber: 'S4', name: 'Dan', localId: 'phoneD2' });
+  assert.equal(r.status, 200);
+  assert.equal((await danNew.call('POST', '/api/checkin/confirm', { claim: cd2 })).data.status, 'present');
+  assert.equal((await dan.call('POST', '/api/checkin/confirm', { claim: cd })).status, 403);
+  assert.ok(await db.one(`SELECT 1 FROM events WHERE kind = 'phone_moved' AND student_number = 'S4'`));
+
   // A claim can't be reused from a different phone (bound to the device cookie).
   r = await mallory.call('POST', '/api/checkin/confirm', { claim: aliceClaim });
   assert.equal(r.status, 410);
@@ -164,7 +191,7 @@ test('full attendance flow with anti-cheating rules', async () => {
   // Manual mark + report.
   await prof.call('PUT', `/api/sessions/${sessionId}/attendance/S9`, { status: 'excused' });
   const detail = await prof.call('GET', `/api/sessions/${sessionId}`);
-  assert.equal(detail.data.attendance.length, 3);
+  assert.equal(detail.data.attendance.length, 5);
   assert.ok(detail.data.events.some((e) => e.kind === 'expired_code'));
   assert.ok(detail.data.events.some((e) => e.kind === 'too_far'));
   assert.ok(detail.data.events.some((e) => e.kind === 'imprecise_location'));

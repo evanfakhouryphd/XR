@@ -74,6 +74,8 @@
     not_on_roster: ['warn', 'Not on roster'],
     register_blocked: ['warn', 'Registration closed'],
     device_reset: ['info', 'Phone reset'],
+    phone_moved: ['warn', 'ID moved to new phone'],
+    phone_relinked: ['info', 'Phone re-linked'],
   };
   const eventPill = (k) => { const [c, l] = EVENT_LABELS[k] || ['', k]; return `<span class="pill ${c}">${esc(l)}</span>`; };
 
@@ -352,7 +354,7 @@
     el.innerHTML = `
       <div class="card">
         <h2>Alerts</h2>
-        <p class="muted">Blocked or suspicious check-in attempts: expired codes (often a forwarded screenshot), scans from outside the classroom, attempts to register an ID on a second phone, and so on.</p>
+        <p class="muted">Blocked or suspicious check-in attempts: expired codes (often a forwarded screenshot), scans from outside the classroom, attempts to register an ID on a second phone, students moving their ID to a new phone, and so on.</p>
         ${events.length ? `<div class="table-scroll"><table>
           <thead><tr><th>When</th><th>What</th><th>Student</th><th>Details</th></tr></thead>
           <tbody>${events.map((e) => `<tr>
@@ -624,7 +626,7 @@
               <button type="submit">Mark present manually</button>
             </form>
           </div>
-          ${d.events.length ? `<div class="card"><h2>Blocked attempts</h2><table><tbody>${d.events.map((e) => `<tr>
+          ${d.events.length ? `<div class="card"><h2>Check-in alerts</h2><table><tbody>${d.events.map((e) => `<tr>
               <td><small>${esc(fmtTime(e.created_at))}</small></td><td>${eventPill(e.kind)}</td><td><code>${esc(e.student_number || '?')}</code></td><td><small>${esc(e.detail)}</small></td>
             </tr>`).join('')}</tbody></table></div>` : ''}
         </div>`;

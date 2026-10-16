@@ -131,7 +131,7 @@
       <div class="card">
         <h2>One-time setup</h2>
         <p class="muted">Link this phone to your student ID. From then on, scanning the code checks you in automatically – no typing.</p>
-        <div class="notice warn" style="font-size:.9rem">Each phone can be linked to <strong>one</strong> student, and each student to <strong>one</strong> phone. Only your instructor can change it.</div>
+        <div class="notice warn" style="font-size:.9rem">Each phone can be linked to <strong>one</strong> student, and each student to <strong>one</strong> phone. If you registered before on another phone or browser, registering here moves your ID to this one, and your instructor is notified.</div>
         ${prefillError ? `<div class="notice bad">${esc(prefillError)}</div>` : ''}
         <form id="reg">
           <div class="field">
