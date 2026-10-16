@@ -689,11 +689,27 @@ function createApp(opts = {}) {
     const displayName = name || onRoster?.name || '';
     if (!displayName) throw new HttpError(400, 'Enter your full name.');
 
-    if (await one('SELECT 1 FROM devices WHERE student_number = $1', [canonicalNumber])) {
-      await ev(canonicalNumber, 'id_on_other_phone', 'Someone tried to register this student ID on a second phone.');
-      throw new HttpError(409, 'This student ID is already registered on another phone. If you changed phones, ask your instructor to reset it.');
+    // The ID is already linked to a phone. Phones lose that link more often
+    // than students cheat: iOS opens codes from the Control Centre scanner in
+    // a separate viewer with its own cookies, and browsers clear storage. So
+    // while registration is open the student can move their ID to this phone,
+    // unless the old phone already checked them in to this session. The move
+    // is logged for the instructor and the old phone stops working.
+    const bound = await one('SELECT id, local_id FROM devices WHERE student_number = $1', [canonicalNumber]);
+    let moved = false;
+    if (bound) {
+      const samePhone = localId && bound.local_id === localId;
+      const checkedIn = await one('SELECT 1 FROM attendance WHERE session_id = $1 AND student_number = $2', [s.id, canonicalNumber]);
+      if (checkedIn && !samePhone) {
+        await ev(canonicalNumber, 'id_on_other_phone', 'Someone tried to register this student ID on a second phone after it was already checked in to this session.');
+        throw new HttpError(409, 'This student ID is already checked in to this session from another phone. If that wasn\'t you, see your instructor.');
+      }
+      moved = true;
+      await ev(canonicalNumber, samePhone ? 'phone_relinked' : 'phone_moved', samePhone
+        ? 'The registered phone lost its sign-in and was linked again.'
+        : 'Student moved their ID to a different phone (or browser). The old phone no longer works.');
     }
-    const prior = localId && await one('SELECT student_number FROM devices WHERE local_id = $1', [localId]);
+    const prior = localId && await one('SELECT student_number FROM devices WHERE local_id = $1 AND student_number != $2', [localId, canonicalNumber]);
     if (prior) {
       await ev(canonicalNumber, 'phone_reused', `Phone already registered to ${prior.student_number} tried to register as ${canonicalNumber}.`);
       throw new HttpError(409, 'This phone is already registered to another student.');
@@ -702,6 +718,7 @@ function createApp(opts = {}) {
       await db.tx(async (tq) => {
         await tq(`INSERT INTO students (student_number, name, created_at) VALUES ($1,$2,$3)
            ON CONFLICT (student_number) DO UPDATE SET name = excluded.name`, [canonicalNumber, displayName, now()]);
+        if (moved) await tq('DELETE FROM devices WHERE student_number = $1', [canonicalNumber]);
         await tq(`INSERT INTO devices (token_hash, local_id, student_number, fingerprint, user_agent, ip, created_at, last_seen) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
           [sec.sha256(token), localId, canonicalNumber, str(req.body.fingerprint, 100), str(req.get('user-agent'), 300), req.ip, now()]);
       });
